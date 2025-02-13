@@ -1,0 +1,12 @@
+Root:
+cd ~/Dropbox/shoptobd_project
+
+Database:
+psql -U postgres -d shoptobd
+
+Server:
+pkill -f node
+node server.js
+
+Backup:
+pg_dump -U postgres -d shoptobd -F c -f ~/Dropbox/shoptobd_project/shoptobd_backup.sql
