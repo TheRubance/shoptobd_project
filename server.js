@@ -1,10 +1,12 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const pool = require("./config/db"); // Use shared database connection
+const pool = require("./config/db"); // Shared database connection
 
 const adminRoutes = require("./routes/adminRoutes"); 
-const authRoutes = require('./routes/authRoutes');  // Added user authentication routes
+const authRoutes = require('./routes/authRoutes');  
+const googleAuthRoutes = require('./routes/googleAuthRoutes');  // ✅ Google Auth
+const facebookAuthRoutes = require('./routes/facebookAuthRoutes');  // ✅ Facebook Auth
 
 const app = express();
 app.use(express.json());
@@ -25,8 +27,14 @@ app.get("/", (req, res) => {
 // ✅ Admin Routes
 app.use("/admin", adminRoutes);
 
-// ✅ Authentication Routes (NEW)
+// ✅ Authentication Routes
 app.use("/auth", authRoutes);
+
+// ✅ Google Authentication Routes
+app.use("/google-auth", googleAuthRoutes);
+
+// ✅ Facebook Authentication Routes
+app.use("/facebook-auth", facebookAuthRoutes);
 
 // ✅ Catch-All Route for Undefined Endpoints
 app.use((req, res) => {

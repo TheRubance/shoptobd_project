@@ -1,6 +1,9 @@
 Root:
 cd ~/Dropbox/shoptobd_project
 
+Post Start
+pg_ctl -D ~/Dropbox/shoptobd_project/postgres_data start
+
 Database:
 psql -U postgres -d shoptobd
 
