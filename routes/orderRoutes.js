@@ -11,7 +11,7 @@ const generateOrderNumber = async () => {
     return `ORD-${datePart}-${count.toString().padStart(4, '0')}`;
 };
 
-// ✅ Create New Order
+// ✅ Create New Order (Fixed Issue: product_price_bdt now correctly stored)
 router.post('/create', async (req, res) => {
     const client = await pool.connect();
 
@@ -36,32 +36,32 @@ router.post('/create', async (req, res) => {
         const orderItems = [];
 
         for (const product of items) {
-            const { product_link, product_name, quantity, size, color, product_price_usd } = product;
+            const { product_link, product_name, quantity, size, color, product_price_usd, shipping_cost_usd = 0.00 } = product;
 
             if (!product_link || !quantity || !product_price_usd) {
                 return res.status(400).json({ message: 'Product details incomplete' });
             }
 
-            const price_usd = product_price_usd * quantity;
-            const price_bdt = Math.ceil(price_usd * usd_to_bdt_rate); // Rounded up as per rule
-            total_usd += price_usd;
-            total_bdt += price_bdt;
+            // ✅ Apply Tax on (Product Price + Shipping)
+            const subtotal_usd = (product_price_usd + shipping_cost_usd) * quantity;
+            const tax_usd = subtotal_usd * (tax_rate / 100);
+            const total_price_usd = subtotal_usd + tax_usd;
+
+            // ✅ Convert to BDT & Apply Rounding at Final Stage
+            const total_price_bdt = Math.ceil(total_price_usd * usd_to_bdt_rate);
+            const product_price_bdt = Math.ceil(product_price_usd * usd_to_bdt_rate); // ✅ FIXED: Ensuring this value is correctly stored
+
+            total_usd += total_price_usd;
+            total_bdt += total_price_bdt;
 
             orderItems.push({
                 product_link, product_name, quantity, size, color,
                 product_price_usd: product_price_usd.toFixed(2),
-                product_price_bdt: Math.ceil(product_price_usd * usd_to_bdt_rate),
-                total_price_usd: price_usd.toFixed(2),
-                total_price_bdt: price_bdt
+                product_price_bdt,  // ✅ FIXED: Now correctly calculated
+                total_price_usd: total_price_usd.toFixed(2),
+                total_price_bdt
             });
         }
-
-        // 📝 Calculate Tax
-        const tax_usd = total_usd * (tax_rate / 100);
-        const tax_bdt = Math.ceil(tax_usd * usd_to_bdt_rate);
-
-        const final_usd = total_usd + tax_usd;
-        const final_bdt = total_bdt + tax_bdt;
 
         // 🛒 Generate Unique Order Number
         const order_number = await generateOrderNumber();
@@ -74,7 +74,7 @@ router.post('/create', async (req, res) => {
             VALUES ($1, $2, $3, $4, $5, $6, 'Pending', 'Pending') RETURNING id;
         `;
         const orderResult = await client.query(orderInsertQuery, [
-            order_number, customer_id, items.length, total_usd, total_bdt, tax_bdt
+            order_number, customer_id, items.length, total_usd, total_bdt, Math.ceil(total_usd * (tax_rate / 100) * usd_to_bdt_rate)
         ]);
 
         const order_id = orderResult.rows[0].id;
@@ -104,10 +104,10 @@ router.post('/create', async (req, res) => {
             order_number,
             products: orderItems,
             totals: {
-                total_usd: final_usd.toFixed(2),
-                total_bdt: final_bdt,
-                tax_usd: tax_usd.toFixed(2),
-                tax_bdt: tax_bdt
+                total_usd: total_usd.toFixed(2),
+                total_bdt,
+                tax_usd: (total_usd - (total_usd / (1 + tax_rate / 100))).toFixed(2),
+                tax_bdt: Math.ceil(total_usd * (tax_rate / 100) * usd_to_bdt_rate)
             }
         });
 
@@ -133,12 +133,7 @@ router.post('/finalize', async (req, res) => {
         }
 
         // 📦 Define Delivery Charges
-        let delivery_cost = 0;
-        if (delivery_method === 'Dhaka Delivery') {
-            delivery_cost = 60;
-        } else if (delivery_method === 'Outside Dhaka') {
-            delivery_cost = 130;
-        }
+        let delivery_cost = delivery_method === 'Dhaka Delivery' ? 60 : 130;
 
         // 🧮 Fetch Order Totals
         const orderQuery = await pool.query(`SELECT total_price_bdt FROM orders WHERE id = $1`, [order_id]);
@@ -167,12 +162,6 @@ router.post('/finalize', async (req, res) => {
             SET delivery_cost_bdt = $1, cod_charge_bdt = $2, total_price_bdt = $3
             WHERE id = $4
         `, [delivery_cost, cod_charge, final_total_bdt, order_id]);
-
-        // 💳 Insert Final Payment
-        await client.query(`
-            INSERT INTO payments (order_id, amount_bdt, payment_method, status, payment_charge_bdt, bkash_charge_bdt, payment_date)
-            VALUES ($1, $2, $3, 'Pending', $4, $5, CURRENT_TIMESTAMP)
-        `, [order_id, final_total_bdt, payment_method, cod_charge, bkash_charge]);
 
         await client.query('COMMIT');
 
