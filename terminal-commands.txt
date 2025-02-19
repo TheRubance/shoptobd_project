@@ -11,5 +11,10 @@ Server:
 pkill -f node
 node server.js
 
+Debug
+pkill -f node
+DEBUG=express:* node server.js
+
+
 Backup:
 pg_dump -U postgres -d shoptobd -F c -f ~/Dropbox/shoptobd_project/shoptobd_backup.sql
