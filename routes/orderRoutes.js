@@ -11,26 +11,23 @@ const generateOrderNumber = async () => {
     return `ORD-${datePart}-${count.toString().padStart(4, '0')}`;
 };
 
-// ✅ Create New Order (Fixed Issue: product_price_bdt now correctly stored)
+// ✅ Create New Order
 router.post('/create', async (req, res) => {
     const client = await pool.connect();
 
     try {
         const { customer_id, items } = req.body;
 
-        // 🛒 Validate Input
         if (!customer_id || !items || items.length === 0) {
             return res.status(400).json({ message: 'Customer ID and at least one product are required' });
         }
 
-        // 🧮 Fetch Exchange Rate & Tax Rate
         const rateResult = await pool.query('SELECT usd_to_bdt_rate, tax_rate FROM tax_rates LIMIT 1');
         if (rateResult.rows.length === 0) {
             return res.status(500).json({ message: 'Exchange rate and tax rate not found' });
         }
         const { usd_to_bdt_rate, tax_rate } = rateResult.rows[0];
 
-        // 🎯 Calculate Product Prices
         let total_usd = 0;
         let total_bdt = 0;
         const orderItems = [];
@@ -42,14 +39,12 @@ router.post('/create', async (req, res) => {
                 return res.status(400).json({ message: 'Product details incomplete' });
             }
 
-            // ✅ Apply Tax on (Product Price + Shipping)
             const subtotal_usd = (product_price_usd + shipping_cost_usd) * quantity;
             const tax_usd = subtotal_usd * (tax_rate / 100);
             const total_price_usd = subtotal_usd + tax_usd;
 
-            // ✅ Convert to BDT & Apply Rounding at Final Stage
             const total_price_bdt = Math.ceil(total_price_usd * usd_to_bdt_rate);
-            const product_price_bdt = Math.ceil(product_price_usd * usd_to_bdt_rate); // ✅ FIXED: Ensuring this value is correctly stored
+            const product_price_bdt = Math.ceil(product_price_usd * usd_to_bdt_rate);
 
             total_usd += total_price_usd;
             total_bdt += total_price_bdt;
@@ -57,16 +52,14 @@ router.post('/create', async (req, res) => {
             orderItems.push({
                 product_link, product_name, quantity, size, color,
                 product_price_usd: product_price_usd.toFixed(2),
-                product_price_bdt,  // ✅ FIXED: Now correctly calculated
+                product_price_bdt,
                 total_price_usd: total_price_usd.toFixed(2),
                 total_price_bdt
             });
         }
 
-        // 🛒 Generate Unique Order Number
         const order_number = await generateOrderNumber();
 
-        // 🛒 Insert Order
         await client.query('BEGIN');
 
         const orderInsertQuery = `
@@ -79,7 +72,6 @@ router.post('/create', async (req, res) => {
 
         const order_id = orderResult.rows[0].id;
 
-        // 🛒 Insert Products into `order_items`
         const itemInsertQuery = `
             INSERT INTO order_items (order_id, product_link, product_name, quantity, size, color, product_price_usd, product_price_bdt, total_price_usd, total_price_bdt)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
@@ -120,22 +112,19 @@ router.post('/create', async (req, res) => {
     }
 });
 
-// ✅ Finalize Order - Auto Apply Delivery & Payment Charges
+// ✅ Finalize Order & Update Sales Reports
 router.post('/finalize', async (req, res) => {
     const client = await pool.connect();
 
     try {
         const { order_id, delivery_method, payment_method } = req.body;
 
-        // 🛒 Validate Input
         if (!order_id || !delivery_method || !payment_method) {
             return res.status(400).json({ message: 'Order ID, delivery method, and payment method are required' });
         }
 
-        // 📦 Define Delivery Charges
         let delivery_cost = delivery_method === 'Dhaka Delivery' ? 60 : 130;
 
-        // 🧮 Fetch Order Totals
         const orderQuery = await pool.query(`SELECT total_price_bdt FROM orders WHERE id = $1`, [order_id]);
         if (orderQuery.rows.length === 0) {
             return res.status(404).json({ message: 'Order not found' });
@@ -145,16 +134,14 @@ router.post('/finalize', async (req, res) => {
         let cod_charge = 0;
         let bkash_charge = 0;
 
-        // 🔄 Apply Payment Charges
         if (payment_method === 'bKash') {
-            bkash_charge = Math.ceil(order_total_bdt * 0.02); // 2% bKash charge
+            bkash_charge = Math.ceil(order_total_bdt * 0.02);
         } else if (payment_method === 'Cash on Delivery' && delivery_method === 'Outside Dhaka') {
-            cod_charge = Math.ceil(order_total_bdt * 0.01); // 1% COD charge
+            cod_charge = Math.ceil(order_total_bdt * 0.01);
         }
 
-        // 🏷 Update Order Totals
         const final_total_bdt = order_total_bdt + delivery_cost + cod_charge;
-        
+
         await client.query('BEGIN');
 
         await client.query(`
@@ -163,10 +150,30 @@ router.post('/finalize', async (req, res) => {
             WHERE id = $4
         `, [delivery_cost, cod_charge, final_total_bdt, order_id]);
 
+        const reportDate = new Date().toISOString().split("T")[0];
+
+        const existingReport = await client.query(`SELECT * FROM sales_reports WHERE report_date = $1 AND report_type = 'Daily'`, [reportDate]);
+
+        if (existingReport.rows.length === 0) {
+            await client.query(`
+                INSERT INTO sales_reports (report_type, report_date, total_sales_bdt, total_orders, total_refunds_bdt, total_profit_bdt, payment_method_breakdown)
+                VALUES ('Daily', $1, $2, 1, 0, $3, $4);
+            `, [reportDate, final_total_bdt, final_total_bdt, JSON.stringify({ [payment_method]: final_total_bdt })]);
+        } else {
+            await client.query(`
+                UPDATE sales_reports
+                SET total_sales_bdt = total_sales_bdt + $1,
+                    total_orders = total_orders + 1,
+                    total_profit_bdt = total_profit_bdt + $1,
+                    payment_method_breakdown = payment_method_breakdown::jsonb || jsonb_build_object($2::TEXT, (COALESCE(payment_method_breakdown->$2, '0')::INTEGER + $1)::TEXT)
+                WHERE report_date = $3 AND report_type = 'Daily';
+            `, [final_total_bdt, payment_method, reportDate]);
+        }
+
         await client.query('COMMIT');
 
         res.status(200).json({
-            message: 'Order finalized successfully',
+            message: 'Order finalized successfully & sales reports updated',
             order_id,
             updated_totals: {
                 total_bdt: final_total_bdt,
