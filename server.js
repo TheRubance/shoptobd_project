@@ -8,7 +8,8 @@ const adminRoutes = require("./routes/adminRoutes");
 const authRoutes = require('./routes/authRoutes');  
 const googleAuthRoutes = require('./routes/googleAuthRoutes');  // ✅ Google Auth
 const facebookAuthRoutes = require('./routes/facebookAuthRoutes');  // ✅ Facebook Auth
-const orderRoutes = require('./routes/orderRoutes'); // ✅ NEW Order Routes
+const orderRoutes = require('./routes/orderRoutes'); // ✅ Order Routes
+const refundRoutes = require('./routes/refundRoutes'); // ✅ Refund Routes (NEW)
 
 // ✅ Import Calculation Logic
 const calculationUtils = require('./utils/calculationUtils');
@@ -41,10 +42,13 @@ app.use("/google-auth", googleAuthRoutes);
 // ✅ Facebook Authentication Routes
 app.use("/facebook-auth", facebookAuthRoutes);
 
-// ✅ Order Routes (NEW)
+// ✅ Order Routes
 app.use("/orders", orderRoutes);
 
-// ✅ Calculation API (NEW)
+// ✅ Refund Routes (NEW)
+app.use("/refunds", refundRoutes);
+
+// ✅ Calculation API
 app.post("/calculate-order-costs", async (req, res) => {
     const { orderId, deliveryMethod, paymentMethod, totalWeightGrams } = req.body;
 
