@@ -4,7 +4,7 @@
 # Ignore dependencies
 node_modules/
 
-# Ignore PostgreSQL database files
+# Ignore PostgreSQL data
 postgres_data/
 
 # Ignore backup files
