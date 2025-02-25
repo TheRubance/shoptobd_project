@@ -1,0 +1,14 @@
+# Ignore environment variables
+.env
+
+# Ignore dependencies
+node_modules/
+
+# Ignore PostgreSQL database files
+postgres_data/
+
+# Ignore backup files
+*.sql
+
+# Ignore system files
+.DS_Store
