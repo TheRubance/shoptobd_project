@@ -6,7 +6,7 @@ const router = express.Router();
 router.post('/update', async (req, res) => {
     const client = await pool.connect();
     try {
-        const { invoice_id, updates } = req.body; // updates = { column1: value1, column2: value2 }
+        const { invoice_id, updates } = req.body;
 
         if (!invoice_id || !updates || typeof updates !== 'object') {
             return res.status(400).json({ message: 'Invoice ID and updates are required' });
@@ -14,8 +14,36 @@ router.post('/update', async (req, res) => {
 
         await client.query('BEGIN');
 
-        // ✅ Temporarily disable the trigger to prevent conflicts
-        await client.query('ALTER TABLE invoices DISABLE TRIGGER trigger_update_due_amount');
+        // ✅ If weight_category is updated, recalculate weight_charge_bdt
+        if (updates.weight_category) {
+            const weightChargeResult = await client.query(
+                `SELECT charge_per_gram FROM weight_charge_categories WHERE category_name = $1`,
+                [updates.weight_category]
+            );
+
+            if (weightChargeResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ message: 'Invalid weight category' });
+            }
+
+            const weightChargePerGram = weightChargeResult.rows[0].charge_per_gram;
+
+            // ✅ Fetch the total weight of the invoice
+            const invoiceResult = await client.query(
+                `SELECT total_weight_grams FROM invoices WHERE id = $1`,
+                [invoice_id]
+            );
+
+            if (invoiceResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ message: 'Invoice not found' });
+            }
+
+            const totalWeightGrams = invoiceResult.rows[0].total_weight_grams;
+
+            // ✅ Recalculate weight charge
+            updates.weight_charge_bdt = weightChargePerGram * totalWeightGrams;
+        }
 
         let updateQuery = 'UPDATE invoices SET ';
         const updateParams = [];
@@ -30,9 +58,6 @@ router.post('/update', async (req, res) => {
         updateParams.push(invoice_id);
 
         const result = await client.query(updateQuery, updateParams);
-
-        // ✅ Re-enable the trigger after the update
-        await client.query('ALTER TABLE invoices ENABLE TRIGGER trigger_update_due_amount');
 
         await client.query('COMMIT');
         
@@ -59,13 +84,10 @@ router.post('/approve', async (req, res) => {
 
         await client.query('BEGIN');
 
-        // ✅ Temporarily disable the trigger to prevent conflicts
-        await client.query('ALTER TABLE invoices DISABLE TRIGGER trigger_update_due_amount');
-
-        // ✅ Check if invoice is Final or Initial
-        const invoiceCheck = await client.query(`
-            SELECT invoice_type FROM invoices WHERE id = $1;
-        `, [invoice_id]);
+        const invoiceCheck = await client.query(
+            `SELECT invoice_type FROM invoices WHERE id = $1;`,
+            [invoice_id]
+        );
 
         if (invoiceCheck.rows.length === 0) {
             await client.query('ROLLBACK');
@@ -74,15 +96,12 @@ router.post('/approve', async (req, res) => {
 
         const invoiceType = invoiceCheck.rows[0].invoice_type;
 
-        // ✅ Approve the invoice and mark it as finalized if it’s a Final Invoice
-        await client.query(`
-            UPDATE invoices 
+        await client.query(
+            `UPDATE invoices 
             SET invoice_status = 'Approved', is_finalized = TRUE, updated_at = NOW() 
-            WHERE id = $1;
-        `, [invoice_id]);
-
-        // ✅ Re-enable the trigger after the update
-        await client.query('ALTER TABLE invoices ENABLE TRIGGER trigger_update_due_amount');
+            WHERE id = $1;`,
+            [invoice_id]
+        );
 
         await client.query('COMMIT');
 
@@ -103,9 +122,10 @@ router.get('/:invoice_id', async (req, res) => {
     const client = await pool.connect();
 
     try {
-        const invoice = await client.query(`
-            SELECT * FROM invoices WHERE id = $1;
-        `, [invoice_id]);
+        const invoice = await client.query(
+            `SELECT * FROM invoices WHERE id = $1;`,
+            [invoice_id]
+        );
 
         if (invoice.rows.length === 0) {
             return res.status(404).json({ message: 'Invoice not found' });
@@ -126,9 +146,9 @@ router.get('/', async (req, res) => {
     const client = await pool.connect();
 
     try {
-        const invoices = await client.query(`
-            SELECT * FROM invoices ORDER BY created_at DESC;
-        `);
+        const invoices = await client.query(
+            `SELECT * FROM invoices ORDER BY created_at DESC;`
+        );
 
         res.status(200).json(invoices.rows);
 
@@ -140,5 +160,4 @@ router.get('/', async (req, res) => {
     }
 });
 
-// ✅ Ensure Proper Export to Prevent Syntax Errors
 module.exports = router;

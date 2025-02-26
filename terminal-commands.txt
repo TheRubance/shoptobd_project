@@ -17,4 +17,4 @@ DEBUG=express:* node server.js
 
 
 Backup:
-pg_dump -U postgres -d shoptobd -F c -f ~/Dropbox/shoptobd_project/shoptobd_backup.sql
+pg_dump -U postgres -d shoptobd -F c -f shoptobd_backup.sql
