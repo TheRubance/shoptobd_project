@@ -2,6 +2,27 @@ const express = require('express');
 const pool = require('../config/db'); // Database connection
 const router = express.Router();
 
+// ✅ Fetch Only Approved Invoices for Customers (Placed Before `/:invoice_id` Route)
+router.get('/customer', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const invoices = await client.query(
+            `SELECT invoice_number, total_invoice_bdt, amount_paid_bdt, due_amount_bdt, 
+                    weight_charge_bdt, delivery_charge_bdt, created_at 
+             FROM invoices 
+             WHERE invoice_status = 'Approved'
+             ORDER BY created_at DESC;`
+        );
+
+        res.status(200).json(invoices.rows);
+    } catch (error) {
+        console.error('🔥 Fetch Customer Invoices Error:', error);
+        res.status(500).json({ message: 'Server error' });
+    } finally {
+        client.release();
+    }
+});
+
 // ✅ Allow Admins to Update Invoice Fields
 router.post('/update', async (req, res) => {
     const client = await pool.connect();
@@ -116,12 +137,17 @@ router.post('/approve', async (req, res) => {
     }
 });
 
-// ✅ Fetch Invoice Details
+// ✅ Fetch Invoice Details by ID (Must Be After `/customer` Route)
 router.get('/:invoice_id', async (req, res) => {
     const { invoice_id } = req.params;
     const client = await pool.connect();
 
     try {
+        // Ensure invoice_id is a number
+        if (isNaN(invoice_id)) {
+            return res.status(400).json({ message: 'Invalid invoice ID' });
+        }
+
         const invoice = await client.query(
             `SELECT * FROM invoices WHERE id = $1;`,
             [invoice_id]
